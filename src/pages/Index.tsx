@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +20,8 @@ import { MetricsOverview } from "@/components/dashboard/MetricsOverview";
 import { ClientCard } from "@/components/dashboard/ClientCard";
 import { CampaignManager } from "@/components/campaigns/CampaignManager";
 import { useIntegrations } from "@/hooks/useIntegrations";
+import { FinancialDashboard } from "@/components/financial/FinancialDashboard";
+import { AdvancedReports } from "@/components/analytics/AdvancedReports";
 
 const Index = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -281,11 +282,13 @@ const Index = () => {
       {/* Navigation Tabs */}
       <div className="bg-white border-b px-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full max-w-md grid-cols-4">
+          <TabsList className="grid w-full max-w-2xl grid-cols-6">
             <TabsTrigger value="overview">Visão Geral</TabsTrigger>
             <TabsTrigger value="clients">Clientes</TabsTrigger>
             <TabsTrigger value="campaigns">Campanhas</TabsTrigger>
+            <TabsTrigger value="financial">Financeiro</TabsTrigger>
             <TabsTrigger value="reports">Relatórios</TabsTrigger>
+            <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -313,11 +316,17 @@ const Index = () => {
               <p className="text-muted-foreground mb-4">Integração completa com Google Ads e Meta em desenvolvimento</p>
             </div>
           </TabsContent>
+          <TabsContent value="financial">
+            <FinancialDashboard />
+          </TabsContent>
           <TabsContent value="reports">
+            <AdvancedReports />
+          </TabsContent>
+          <TabsContent value="analytics">
             <div className="text-center py-12">
               <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">Sistema de Relatórios</h3>
-              <p className="text-muted-foreground mb-4">Editor drag-and-drop em desenvolvimento</p>
+              <h3 className="text-lg font-semibold mb-2">Analytics Avançado</h3>
+              <p className="text-muted-foreground mb-4">Sistema de BI em desenvolvimento</p>
             </div>
           </TabsContent>
         </Tabs>
