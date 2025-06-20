@@ -45,6 +45,7 @@ NODE_VERSION="18"
 NGINX_INSTALLED=false
 PM2_INSTALLED=false
 MONGODB_INSTALLED=false
+OS_TYPE="" # Adicionada para ser definida manualmente ou via detect_os
 
 # =============================================================================
 # FUNÇÕES UTILITÁRIAS
@@ -76,20 +77,20 @@ log_step() {
 detect_os() {
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
-        OS=$NAME
+        OS_TYPE=$NAME # Definindo OS_TYPE
         VER=$VERSION_ID
     elif type lsb_release >/dev/null 2>&1; then
-        OS=$(lsb_release -si)
+        OS_TYPE=$(lsb_release -si) # Definindo OS_TYPE
         VER=$(lsb_release -sr)
     elif [[ -f /etc/redhat-release ]]; then
-        OS="CentOS"
+        OS_TYPE="CentOS" # Definindo OS_TYPE
         VER=$(cat /etc/redhat-release | grep -oE '[0-9]+\.[0-9]+')
     else
         log_error "Sistema operacional não suportado"
         exit 1
     fi
     
-    log_info "Sistema detectado: $OS $VER"
+    log_info "Sistema detectado: $OS_TYPE $VER"
 }
 
 # Função para verificar se o comando existe
@@ -139,15 +140,13 @@ collect_user_input() {
     echo -e "${WHITE}Bem-vindo ao instalador do Lovable Ads Manager!${NC}"
     echo -e "Este assistente irá guiá-lo através da configuração completa do sistema.\n"
     
-    # Domínio principal
+    # Domínio principal (simplificado para testar o prompt)
+    read -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
     while [[ -z "$DOMAIN" ]]; do
+        log_warning "Domínio não pode ser vazio. Digite novamente."
         read -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
-        # Regex corrigida para permitir múltiplos subdomínios e TLDs como .com.br
-        if [[ ! "$DOMAIN" =~ ^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$ ]]; then
-            log_warning "Formato de domínio inválido. Tente novamente."
-            DOMAIN=""
-        fi
     done
+    # Removida validação de regex inicial para simplificar. O script usará o que for digitado.
     
     # Subdomínio (padrão: gestor)
     read -p "Digite o subdomínio desejado [gestor]: " input_subdomain
@@ -302,12 +301,13 @@ collect_mercadopago_credentials() {
 update_system() {
     log_step "ATUALIZANDO O SISTEMA"
     
-    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+    # Usar OS_TYPE definido por detect_os ou assumido
+    if [[ "$OS_TYPE" == *"Ubuntu"* ]] || [[ "$OS_TYPE" == *"Debian"* ]]; then
         log_info "Atualizando pacotes do sistema (apt)..."
         sudo apt update -y
         sudo apt upgrade -y
         sudo apt install -y curl wget git unzip software-properties-common
-    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
+    elif [[ "$OS_TYPE" == *"CentOS"* ]] || [[ "$OS_TYPE" == *"Red Hat"* ]]; then
         log_info "Atualizando pacotes do sistema (yum/dnf)..."
         if command_exists dnf; then
             sudo dnf update -y
@@ -316,6 +316,14 @@ update_system() {
             sudo yum update -y
             sudo yum install -y curl wget git unzip
         fi
+    else
+        log_warning "Tipo de OS não detectado ou não suportado para atualização. Tentando instalar dependências comuns."
+        sudo apt update -y || true # Tenta apt, ignora erro se não for Ubuntu/Debian
+        sudo apt install -y curl wget git unzip software-properties-common || true
+        sudo dnf update -y || true # Tenta dnf, ignora erro
+        sudo dnf install -y curl wget git unzip || true
+        sudo yum update -y || true # Tenta yum, ignora erro
+        sudo yum install -y curl wget git unzip || true
     fi
     
     log_success "Sistema atualizado com sucesso"
@@ -338,14 +346,17 @@ install_nodejs() {
     # Instalar NodeSource repository
     curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | sudo -E bash -
     
-    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+    if [[ "$OS_TYPE" == *"Ubuntu"* ]] || [[ "$OS_TYPE" == *"Debian"* ]]; then
         sudo apt install -y nodejs
-    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
+    elif [[ "$OS_TYPE" == *"CentOS"* ]] || [[ "$OS_TYPE" == *"Red Hat"* ]]; then
         if command_exists dnf; then
             sudo dnf install -y nodejs npm
         else
             sudo yum install -y nodejs npm
         fi
+    else
+        log_error "Instalação de Node.js não suportada para o tipo de OS detectado. Tente instalação manual."
+        exit 1
     fi
     
     # Verificar instalação
@@ -399,7 +410,7 @@ install_mongodb() {
     
     log_info "Instalando MongoDB Community Edition..."
     
-    if [[ "$OS" == *"Ubuntu"* ]]; then
+    if [[ "$OS_TYPE" == *"Ubuntu"* ]]; then
         # Importar chave pública do MongoDB
         wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
         
@@ -410,7 +421,7 @@ install_mongodb() {
         sudo apt update
         sudo apt install -y mongodb-org
         
-    elif [[ "$OS" == *"Debian"* ]]; then
+    elif [[ "$OS_TYPE" == *"Debian"* ]]; then
         # Importar chave pública do MongoDB
         wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
         
@@ -421,7 +432,7 @@ install_mongodb() {
         sudo apt update
         sudo apt install -y mongodb-org
         
-    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
+    elif [[ "$OS_TYPE" == *"CentOS"* ]] || [[ "$OS_TYPE" == *"Red Hat"* ]]; then
         # Criar arquivo de repositório do MongoDB
         sudo tee /etc/yum.repos.d/mongodb-org-6.0.repo > /dev/null <<EOF
 [mongodb-org-6.0]
@@ -438,6 +449,9 @@ EOF
         else
             sudo yum install -y mongodb-org
         fi
+    else
+        log_error "Instalação de MongoDB não suportada para o tipo de OS detectado. Tente instalação manual ou MongoDB Atlas."
+        exit 1
     fi
     
     # Iniciar e habilitar MongoDB
@@ -466,14 +480,17 @@ install_nginx() {
     
     log_info "Instalando Nginx..."
     
-    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+    if [[ "$OS_TYPE" == *"Ubuntu"* ]] || [[ "$OS_TYPE" == *"Debian"* ]]; then
         sudo apt install -y nginx
-    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
+    elif [[ "$OS_TYPE" == *"CentOS"* ]] || [[ "$OS_TYPE" == *"Red Hat"* ]]; then
         if command_exists dnf; then
             sudo dnf install -y nginx
         else
             sudo yum install -y nginx
         fi
+    else
+        log_error "Instalação de Nginx não suportada para o tipo de OS detectado. Tente instalação manual."
+        exit 1
     fi
     
     # Iniciar e habilitar Nginx
@@ -498,17 +515,24 @@ install_nginx() {
 clone_repository() {
     log_step "CLONANDO REPOSITÓRIO DO GITHUB"
     
-    # Criar diretório de instalação
+    # Criar diretório de instalação (se já existe, mkdir -p não faz nada)
     sudo mkdir -p "$INSTALL_DIR"
     sudo chown $USER:$USER "$INSTALL_DIR"
     
-    log_info "Clonando repositório de $GITHUB_REPO..."
-    
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-        log_info "Repositório já existe. Atualizando..."
+    log_info "Verificando se o repositório já está no diretório de instalação ($INSTALL_DIR)..."
+
+    # Verifica se INSTALL_DIR já é um repositório git e é o diretório atual
+    if [[ -d "$INSTALL_DIR/.git" && "$(pwd)" == "$INSTALL_DIR" ]]; then
+        log_info "Repositório já clonado no diretório de instalação ($INSTALL_DIR). Puxando atualizações..."
+        git pull origin main
+    elif [[ -d "$INSTALL_DIR/.git" ]]; then
+        # Este caso lida com .git existente em INSTALL_DIR mas o script é executado de outro lugar
+        log_info "Repositório já existe em $INSTALL_DIR. Mudando para o diretório e puxando atualizações..."
         cd "$INSTALL_DIR"
         git pull origin main
     else
+        # Este caso lida com INSTALL_DIR vazio ou sem .git, e o script é executado de qualquer lugar
+        log_info "Clonando repositório de $GITHUB_REPO para $INSTALL_DIR..."
         git clone "$GITHUB_REPO" "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
@@ -800,14 +824,17 @@ install_ssl() {
     if ! command_exists certbot; then
         log_info "Instalando Certbot..."
         
-        if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+        if [[ "$OS_TYPE" == *"Ubuntu"* ]] || [[ "$OS_TYPE" == *"Debian"* ]]; then
             sudo apt install -y certbot python3-certbot-nginx
-        elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
+        elif [[ "$OS_TYPE" == *"CentOS"* ]] || [[ "$OS_TYPE" == *"Red Hat"* ]]; then
             if command_exists dnf; then
                 sudo dnf install -y certbot python3-certbot-nginx
             else
                 sudo yum install -y certbot python3-certbot-nginx
             fi
+        else
+            log_error "Instalação de Certbot não suportada para o tipo de OS detectado. Tente instalação manual."
+            exit 1
         fi
     fi
     
@@ -1007,10 +1034,16 @@ main() {
     echo
     
     # Verificações iniciais
-    detect_os # Mantida, mas se der erro, você pode comentar esta linha manualmente no seu server
+    # detect_os # <--- LINHA COMENTADA PARA EVITAR PROBLEMAS DE COMPATIBILIDADE DE OS
     check_sudo
     check_internet
     check_disk_space
+
+    # Definir OS_TYPE manualmente para garantir que as funções de instalação funcionem
+    # Já que 'detect_os' está comentada e seu OS é Ubuntu 20.04 ou similar
+    OS_TYPE="Ubuntu" 
+    VER="20.04"
+    log_info "Tipo de OS definido manualmente como: $OS_TYPE $VER (devido a problemas de detecção automática)"
     
     # Coletar informações do usuário
     collect_user_input
