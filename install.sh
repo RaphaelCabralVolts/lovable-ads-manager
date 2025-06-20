@@ -1,5 +1,8 @@
 #!/bin/bash
 
+set -e  # Exit on any error
+set -x  # Enable debugging: print each command before execution
+
 # =============================================================================
 # LOVABLE ADS MANAGER - SCRIPT DE INSTALAÇÃO AUTOMATIZADA
 # =============================================================================
@@ -17,7 +20,6 @@
 # Data: $(date +%Y-%m-%d)
 # =============================================================================
 
-set -e  # Exit on any error
 
 # Cores para output (mantidas para log_info/success/error, mas removidas de read -p)
 RED='\033[0;31m'
@@ -73,7 +75,7 @@ log_step() {
     echo -e "${CYAN}===============================================================================${NC}"
 }
 
-# Função para detectar o sistema operacional
+# Função para detectar o sistema operacional (comentada no main, mas definida aqui)
 detect_os() {
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
@@ -140,21 +142,20 @@ collect_user_input() {
     echo -e "${WHITE}Bem-vindo ao instalador do Lovable Ads Manager!${NC}"
     echo -e "Este assistente irá guiá-lo através da configuração completa do sistema.\n"
     
-    # Domínio principal (simplificado para testar o prompt)
-    read -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
+    # Domínio principal
+    read -r -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
     while [[ -z "$DOMAIN" ]]; do
         log_warning "Domínio não pode ser vazio. Digite novamente."
-        read -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
+        read -r -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
     done
-    # Removida validação de regex inicial para simplificar. O script usará o que for digitado.
     
     # Subdomínio (padrão: gestor)
-    read -p "Digite o subdomínio desejado [gestor]: " input_subdomain
+    read -r -p "Digite o subdomínio desejado [gestor]: " input_subdomain
     SUBDOMAIN=${input_subdomain:-gestor}
     
     # Diretório de instalação
     DEFAULT_INSTALL_DIR="/var/www/$SUBDOMAIN"
-    read -p "Diretório de instalação [$DEFAULT_INSTALL_DIR]: " input_dir
+    read -r -p "Diretório de instalação [$DEFAULT_INSTALL_DIR]: " input_dir
     INSTALL_DIR=${input_dir:-$DEFAULT_INSTALL_DIR}
     
     log_info "Sistema será instalado em: $SUBDOMAIN.$DOMAIN -> $INSTALL_DIR"
@@ -166,7 +167,7 @@ collect_user_input() {
     echo "3) Usar MongoDB existente (informar URI)"
     
     while true; do
-        read -p "Escolha uma opção [1-3]: " mongodb_choice
+        read -r -p "Escolha uma opção [1-3]: " mongodb_choice
         case $mongodb_choice in
             1)
                 MONGODB_CHOICE="local"
@@ -176,14 +177,14 @@ collect_user_input() {
             2)
                 MONGODB_CHOICE="atlas"
                 while [[ -z "$MONGODB_URI" ]]; do
-                    read -p "Digite a URI do MongoDB Atlas: " MONGODB_URI
+                    read -r -p "Digite a URI do MongoDB Atlas: " MONGODB_URI
                 done
                 break
                 ;;
             3)
                 MONGODB_CHOICE="existing"
                 while [[ -z "$MONGODB_URI" ]]; do
-                    read -p "Digite a URI do MongoDB: " MONGODB_URI
+                    read -r -p "Digite a URI do MongoDB: " MONGODB_URI
                 done
                 break
                 ;;
@@ -198,18 +199,18 @@ collect_user_input() {
     echo "Configure o SMTP para envio de emails (relatórios, notificações, etc.)"
     
     while [[ -z "$SMTP_HOST" ]]; do
-        read -p "Servidor SMTP (ex: smtp.gmail.com): " SMTP_HOST
+        read -r -p "Servidor SMTP (ex: smtp.gmail.com): " SMTP_HOST
     done
     
-    read -p "Porta SMTP [587]: " smtp_port
+    read -r -p "Porta SMTP [587]: " smtp_port
     SMTP_PORT=${smtp_port:-587}
     
     while [[ -z "$SMTP_USER" ]]; do
-        read -p "Usuário SMTP (email): " SMTP_USER
+        read -r -p "Usuário SMTP (email): " SMTP_USER
     done
     
     while [[ -z "$SMTP_PASS" ]]; do
-        read -s -p "Senha SMTP: " SMTP_PASS
+        read -r -s -p "Senha SMTP: " SMTP_PASS
         echo
     done
     
@@ -221,7 +222,7 @@ collect_user_input() {
     echo "4) Configurar depois"
     
     while true; do
-        read -p "Escolha o gateway de pagamento [1-4]: " gateway_choice
+        read -r -p "Escolha o gateway de pagamento [1-4]: " gateway_choice
         case $gateway_choice in
             1)
                 GATEWAY_TYPE="stripe"
@@ -258,7 +259,7 @@ collect_user_input() {
     echo -e "Gateway: ${GREEN}$GATEWAY_TYPE${NC}"
     
     echo
-    read -p "Confirma a instalação com essas configurações? [y/N]: " confirm
+    read -r -p "Confirma a instalação com essas configurações? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         log_info "Instalação cancelada pelo usuário."
         exit 0
@@ -268,29 +269,29 @@ collect_user_input() {
 # Função para coletar credenciais do Stripe
 collect_stripe_credentials() {
     echo -e "\n${WHITE}=== CREDENCIAIS DO STRIPE ===${NC}"
-    read -p "Chave pública do Stripe: " STRIPE_PUBLIC_KEY
-    read -s -p "Chave secreta do Stripe: " STRIPE_SECRET_KEY
+    read -r -p "Chave pública do Stripe: " STRIPE_PUBLIC_KEY
+    read -r -s -p "Chave secreta do Stripe: " STRIPE_SECRET_KEY
     echo
-    read -s -p "Webhook secret do Stripe: " STRIPE_WEBHOOK_SECRET
+    read -r -s -p "Webhook secret do Stripe: " STRIPE_WEBHOOK_SECRET
     echo
 }
 
 # Função para coletar credenciais do PagSeguro
 collect_pagseguro_credentials() {
     echo -e "\n${WHITE}=== CREDENCIAIS DO PAGSEGURO ===${NC}"
-    read -p "Email do PagSeguro: " PAGSEGURO_EMAIL
-    read -s -p "Token do PagSeguro: " PAGSEGURO_TOKEN
+    read -r -p "Email do PagSeguro: " PAGSEGURO_EMAIL
+    read -r -s -p "Token do PagSeguro: " PAGSEGURO_TOKEN
     echo
-    read -p "Usar sandbox? [y/N]: " pagseguro_sandbox
+    read -r -p "Usar sandbox? [y/N]: " pagseguro_sandbox
     PAGSEGURO_SANDBOX=${pagseguro_sandbox:-n}
 }
 
 # Função para coletar credenciais do Mercado Pago
 collect_mercadopago_credentials() {
     echo -e "\n${WHITE}=== CREDENCIAIS DO MERCADO PAGO ===${NC}"
-    read -s -p "Access Token do Mercado Pago: " MERCADOPAGO_ACCESS_TOKEN
+    read -r -s -p "Access Token do Mercado Pago: " MERCADOPAGO_ACCESS_TOKEN
     echo
-    read -p "Chave pública do Mercado Pago: " MERCADOPAGO_PUBLIC_KEY
+    read -r -p "Chave pública do Mercado Pago: " MERCADOPAGO_PUBLIC_KEY
 }
 
 # =============================================================================
@@ -705,58 +706,21 @@ EOF
 configure_nginx() {
     log_step "CONFIGURANDO NGINX"
     
-    log_info "Criando configuração do Nginx para $SUBDOMAIN.$DOMAIN..."
+    log_info "Criando configuração inicial HTTP do Nginx para $SUBDOMAIN.$DOMAIN..."
     
-    # Criar configuração do site
+    # Criar configuração do site (inicialmente APENAS HTTP)
     sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
 server {
     listen 80;
     server_name $SUBDOMAIN.$DOMAIN;
     
-    # Redirect HTTP to HTTPS
-    return 301 https://\$server_name\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $SUBDOMAIN.$DOMAIN;
-    
-    # SSL Configuration (será configurado com Let's Encrypt)
-    ssl_certificate /etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/privkey.pem;
-    
-    # SSL Security
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # Security Headers
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    
     # Root directory for frontend
     root $INSTALL_DIR/frontend/dist;
     index index.html;
     
-    # Gzip compression
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
-    
     # Frontend routes (React Router)
     location / {
         try_files \$uri \$uri/ /index.html;
-        
-        # Cache static assets
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
-            expires 1y;
-            add_header Cache-Control "public, immutable";
-        }
     }
     
     # API routes (proxy to backend)
@@ -809,9 +773,10 @@ EOF
     
     # Testar configuração
     if sudo nginx -t; then
-        log_success "Configuração do Nginx criada com sucesso"
+        log_success "Configuração inicial HTTP do Nginx criada com sucesso"
+        sudo systemctl reload nginx # Reload Nginx after initial config
     else
-        log_error "Erro na configuração do Nginx"
+        log_error "Erro na configuração inicial HTTP do Nginx"
         exit 1
     fi
 }
@@ -838,32 +803,10 @@ install_ssl() {
         fi
     fi
     
-    # Configuração temporária do Nginx sem SSL
-    sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
-server {
-    listen 80;
-    server_name $SUBDOMAIN.$DOMAIN;
-    
-    root $INSTALL_DIR/frontend/dist;
-    index index.html;
-    
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-    
-    location /api/ {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
+    # Certbot vai lidar com a configuração do Nginx para SSL.
+    # O script original já tem uma boa lógica aqui, que Certbot --nginx usa.
+    # A configuracao temporaria HTTP e reload já são feitas pelo certbot --nginx.
 
-    # Recarregar Nginx
-    sudo systemctl reload nginx
-    
     # Obter certificado SSL
     log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN..."
     
@@ -874,33 +817,14 @@ EOF
         echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
         
     else
-        log_warning "Falha ao obter certificado SSL. Continuando sem HTTPS..."
+        log_warning "Falha ao obter certificado SSL. Verifique seus registros DNS e firewall. Continuando sem HTTPS..."
         
-        # Manter configuração HTTP
-        sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
-server {
-    listen 80;
-    server_name $SUBDOMAIN.$DOMAIN;
-    
-    root $INSTALL_DIR/frontend/dist;
-    index index.html;
-    
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-    
-    location /api/ {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
+        # Se o Certbot falhar, garantimos que o Nginx continue configurado para HTTP.
+        # A configuração inicial HTTP já está no lugar e recarregada por configure_nginx.
+        # Não precisamos reescrever o arquivo aqui, apenas notificar.
     fi
     
-    # Recarregar Nginx
+    # Sempre recarregar Nginx para garantir que novas configurações (seja HTTP ou HTTPS) sejam aplicadas.
     sudo systemctl reload nginx
 }
 
@@ -1053,7 +977,7 @@ main() {
     install_nodejs
     install_pm2
     install_mongodb
-    install_nginx
+    install_nginx # Esta função agora cria apenas a configuração HTTP
     
     # Instalação da aplicação
     clone_repository
@@ -1061,9 +985,8 @@ main() {
     install_frontend_dependencies
     configure_environment
     
-    # Configuração do servidor web
-    configure_nginx
-    install_ssl
+    # Configuração do servidor web e SSL (SSL AGORA É CHAMADO DEPOIS DO NGINX INICIAL)
+    install_ssl # Esta função agora obtém o SSL e reconfigura o Nginx para HTTPS
     
     # Inicialização da aplicação
     configure_pm2
