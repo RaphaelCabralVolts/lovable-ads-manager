@@ -275,4 +275,3 @@ MIT License - veja o arquivo [LICENSE](LICENSE) para detalhes.
 ---
 
 **Desenvolvido com ❤️ por Manus AI**
-
