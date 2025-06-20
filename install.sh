@@ -19,14 +19,13 @@
 
 set -e  # Exit on any error
 
-# Cores para output
+# Cores para output (mantidas para log_info/success/error, mas removidas de read -p)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
-WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Variáveis globais
@@ -142,20 +141,21 @@ collect_user_input() {
     
     # Domínio principal
     while [[ -z "$DOMAIN" ]]; do
-        read -p "$(echo -e ${CYAN}Digite seu domínio principal (ex: dcraft.com.br): ${NC})" DOMAIN
-        if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
+        read -p "Digite seu domínio principal (ex: dcraft.com.br): " DOMAIN
+        # Regex corrigida para permitir múltiplos subdomínios e TLDs como .com.br
+        if [[ ! "$DOMAIN" =~ ^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$ ]]; then
             log_warning "Formato de domínio inválido. Tente novamente."
             DOMAIN=""
         fi
     done
     
     # Subdomínio (padrão: gestor)
-    read -p "$(echo -e ${CYAN}Digite o subdomínio desejado [gestor]: ${NC})" input_subdomain
+    read -p "Digite o subdomínio desejado [gestor]: " input_subdomain
     SUBDOMAIN=${input_subdomain:-gestor}
     
     # Diretório de instalação
     DEFAULT_INSTALL_DIR="/var/www/$SUBDOMAIN"
-    read -p "$(echo -e ${CYAN}Diretório de instalação [$DEFAULT_INSTALL_DIR]: ${NC})" input_dir
+    read -p "Diretório de instalação [$DEFAULT_INSTALL_DIR]: " input_dir
     INSTALL_DIR=${input_dir:-$DEFAULT_INSTALL_DIR}
     
     log_info "Sistema será instalado em: $SUBDOMAIN.$DOMAIN -> $INSTALL_DIR"
@@ -167,7 +167,7 @@ collect_user_input() {
     echo "3) Usar MongoDB existente (informar URI)"
     
     while true; do
-        read -p "$(echo -e ${CYAN}Escolha uma opção [1-3]: ${NC})" mongodb_choice
+        read -p "Escolha uma opção [1-3]: " mongodb_choice
         case $mongodb_choice in
             1)
                 MONGODB_CHOICE="local"
@@ -177,14 +177,14 @@ collect_user_input() {
             2)
                 MONGODB_CHOICE="atlas"
                 while [[ -z "$MONGODB_URI" ]]; do
-                    read -p "$(echo -e ${CYAN}Digite a URI do MongoDB Atlas: ${NC})" MONGODB_URI
+                    read -p "Digite a URI do MongoDB Atlas: " MONGODB_URI
                 done
                 break
                 ;;
             3)
                 MONGODB_CHOICE="existing"
                 while [[ -z "$MONGODB_URI" ]]; do
-                    read -p "$(echo -e ${CYAN}Digite a URI do MongoDB: ${NC})" MONGODB_URI
+                    read -p "Digite a URI do MongoDB: " MONGODB_URI
                 done
                 break
                 ;;
@@ -199,18 +199,18 @@ collect_user_input() {
     echo "Configure o SMTP para envio de emails (relatórios, notificações, etc.)"
     
     while [[ -z "$SMTP_HOST" ]]; do
-        read -p "$(echo -e ${CYAN}Servidor SMTP (ex: smtp.gmail.com): ${NC})" SMTP_HOST
+        read -p "Servidor SMTP (ex: smtp.gmail.com): " SMTP_HOST
     done
     
-    read -p "$(echo -e ${CYAN}Porta SMTP [587]: ${NC})" smtp_port
+    read -p "Porta SMTP [587]: " smtp_port
     SMTP_PORT=${smtp_port:-587}
     
     while [[ -z "$SMTP_USER" ]]; do
-        read -p "$(echo -e ${CYAN}Usuário SMTP (email): ${NC})" SMTP_USER
+        read -p "Usuário SMTP (email): " SMTP_USER
     done
     
     while [[ -z "$SMTP_PASS" ]]; do
-        read -s -p "$(echo -e ${CYAN}Senha SMTP: ${NC})" SMTP_PASS
+        read -s -p "Senha SMTP: " SMTP_PASS
         echo
     done
     
@@ -222,7 +222,7 @@ collect_user_input() {
     echo "4) Configurar depois"
     
     while true; do
-        read -p "$(echo -e ${CYAN}Escolha o gateway de pagamento [1-4]: ${NC})" gateway_choice
+        read -p "Escolha o gateway de pagamento [1-4]: " gateway_choice
         case $gateway_choice in
             1)
                 GATEWAY_TYPE="stripe"
@@ -259,7 +259,7 @@ collect_user_input() {
     echo -e "Gateway: ${GREEN}$GATEWAY_TYPE${NC}"
     
     echo
-    read -p "$(echo -e ${YELLOW}Confirma a instalação com essas configurações? [y/N]: ${NC})" confirm
+    read -p "Confirma a instalação com essas configurações? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         log_info "Instalação cancelada pelo usuário."
         exit 0
@@ -269,29 +269,29 @@ collect_user_input() {
 # Função para coletar credenciais do Stripe
 collect_stripe_credentials() {
     echo -e "\n${WHITE}=== CREDENCIAIS DO STRIPE ===${NC}"
-    read -p "$(echo -e ${CYAN}Chave pública do Stripe: ${NC})" STRIPE_PUBLIC_KEY
-    read -s -p "$(echo -e ${CYAN}Chave secreta do Stripe: ${NC})" STRIPE_SECRET_KEY
+    read -p "Chave pública do Stripe: " STRIPE_PUBLIC_KEY
+    read -s -p "Chave secreta do Stripe: " STRIPE_SECRET_KEY
     echo
-    read -s -p "$(echo -e ${CYAN}Webhook secret do Stripe: ${NC})" STRIPE_WEBHOOK_SECRET
+    read -s -p "Webhook secret do Stripe: " STRIPE_WEBHOOK_SECRET
     echo
 }
 
 # Função para coletar credenciais do PagSeguro
 collect_pagseguro_credentials() {
     echo -e "\n${WHITE}=== CREDENCIAIS DO PAGSEGURO ===${NC}"
-    read -p "$(echo -e ${CYAN}Email do PagSeguro: ${NC})" PAGSEGURO_EMAIL
-    read -s -p "$(echo -e ${CYAN}Token do PagSeguro: ${NC})" PAGSEGURO_TOKEN
+    read -p "Email do PagSeguro: " PAGSEGURO_EMAIL
+    read -s -p "Token do PagSeguro: " PAGSEGURO_TOKEN
     echo
-    read -p "$(echo -e ${CYAN}Usar sandbox? [y/N]: ${NC})" pagseguro_sandbox
+    read -p "Usar sandbox? [y/N]: " pagseguro_sandbox
     PAGSEGURO_SANDBOX=${pagseguro_sandbox:-n}
 }
 
 # Função para coletar credenciais do Mercado Pago
 collect_mercadopago_credentials() {
     echo -e "\n${WHITE}=== CREDENCIAIS DO MERCADO PAGO ===${NC}"
-    read -s -p "$(echo -e ${CYAN}Access Token do Mercado Pago: ${NC})" MERCADOPAGO_ACCESS_TOKEN
+    read -s -p "Access Token do Mercado Pago: " MERCADOPAGO_ACCESS_TOKEN
     echo
-    read -p "$(echo -e ${CYAN}Chave pública do Mercado Pago: ${NC})" MERCADOPAGO_PUBLIC_KEY
+    read -p "Chave pública do Mercado Pago: " MERCADOPAGO_PUBLIC_KEY
 }
 
 # =============================================================================
@@ -1007,7 +1007,7 @@ main() {
     echo
     
     # Verificações iniciais
-    detect_os
+    detect_os # Mantida, mas se der erro, você pode comentar esta linha manualmente no seu server
     check_sudo
     check_internet
     check_disk_space
@@ -1083,4 +1083,3 @@ main() {
 
 # Executar função principal
 main "$@"
-
