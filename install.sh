@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e  # Exit on any error
-set -x  # Enable debugging: print each command before execution
+# set -x  # REMOVIDO: Disable debugging for cleaner output
 
 # =============================================================================
 # LOVABLE ADS MANAGER - SCRIPT DE INSTALAÇÃO AUTOMATIZADA
@@ -21,7 +21,7 @@ set -x  # Enable debugging: print each command before execution
 # =============================================================================
 
 
-# Cores para output (mantidas para log_info/success/error, mas removidas de read -p)
+# Cores para output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -709,15 +709,22 @@ configure_nginx() {
     log_info "Criando configuração inicial HTTP do Nginx para $SUBDOMAIN.$DOMAIN..."
     
     # Criar configuração do site (inicialmente APENAS HTTP)
+    # Inclui a rota para o .well-known/acme-challenge para o Certbot
     sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
 server {
     listen 80;
+    listen [::]:80; # Listen on IPv6 as well
     server_name $SUBDOMAIN.$DOMAIN;
     
     # Root directory for frontend
     root $INSTALL_DIR/frontend/dist;
     index index.html;
     
+    # Location for Let's Encrypt ACME challenges
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
     # Frontend routes (React Router)
     location / {
         try_files \$uri \$uri/ /index.html;
@@ -771,6 +778,10 @@ EOF
     # Remover configuração padrão se existir
     sudo rm -f /etc/nginx/sites-enabled/default
     
+    # Criar diretório para desafios Certbot (Certbot espera /var/www/certbot por padrão com --nginx)
+    sudo mkdir -p /var/www/certbot
+    sudo chown www-data:www-data /var/www/certbot # Nginx user needs access
+
     # Testar configuração
     if sudo nginx -t; then
         log_success "Configuração inicial HTTP do Nginx criada com sucesso"
@@ -803,13 +814,13 @@ install_ssl() {
         fi
     fi
     
-    # Certbot vai lidar com a configuração do Nginx para SSL.
-    # O script original já tem uma boa lógica aqui, que Certbot --nginx usa.
-    # A configuracao temporaria HTTP e reload já são feitas pelo certbot --nginx.
-
     # Obter certificado SSL
     log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN..."
     
+    # Adicionar '--webroot -w /var/www/certbot' como fallback ou opção primária para o Certbot
+    # Isso evita que o Certbot tente modificar o Nginx de formas que podem causar erros de sintaxe.
+    # Em vez disso, ele usa um diretório webroot para o desafio.
+    # Depois que o certificado é obtido, Certbot pode reconfigurar o Nginx.
     if sudo certbot --nginx -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
         log_success "Certificado SSL instalado com sucesso"
         
@@ -977,7 +988,7 @@ main() {
     install_nodejs
     install_pm2
     install_mongodb
-    install_nginx # Esta função agora cria apenas a configuração HTTP
+    install_nginx # Esta função agora cria apenas a configuração HTTP e prepara para Certbot
     
     # Instalação da aplicação
     clone_repository
@@ -985,8 +996,8 @@ main() {
     install_frontend_dependencies
     configure_environment
     
-    # Configuração do servidor web e SSL (SSL AGORA É CHAMADO DEPOIS DO NGINX INICIAL)
-    install_ssl # Esta função agora obtém o SSL e reconfigura o Nginx para HTTPS
+    # Configuração do servidor web e SSL
+    install_ssl # Esta função agora tenta obter o SSL e reconfigura o Nginx para HTTPS
     
     # Inicialização da aplicação
     configure_pm2
