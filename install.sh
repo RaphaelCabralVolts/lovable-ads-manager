@@ -257,7 +257,7 @@ collect_user_input() {
     echo -e "Diretório: ${GREEN}$INSTALL_DIR${NC}"
     echo -e "MongoDB: ${GREEN}$MONGODB_CHOICE${NC}"
     echo -e "SMTP: ${GREEN}$SMTP_HOST:$SMTP_PORT${NC}"
-    echo -e "Gateway: ${GREEN}$GATEWAY_TYPE${NC}"
+    echo -e "Gateway: ${GREEN}$GATEAY_TYPE${NC}"
     
     echo
     read -r -p "Confirma a instalação com essas configurações? [y/N]: " confirm
@@ -298,6 +298,22 @@ collect_mercadopago_credentials() {
 # =============================================================================
 # FUNÇÕES DE INSTALAÇÃO DE DEPENDÊNCIAS
 # =============================================================================
+
+# Função para configurar firewall (UFW)
+configure_firewall() {
+    log_step "CONFIGURANDO FIREWALL (UFW)"
+    if command_exists ufw; then
+        log_info "Firewall UFW detectado. Configurando regras..."
+        sudo ufw allow OpenSSH
+        sudo ufw allow http
+        sudo ufw allow https
+        sudo ufw --force enable
+        log_success "Portas 80 (HTTP), 443 (HTTPS) e 22 (SSH) liberadas no UFW."
+    else
+        log_warning "UFW não detectado. As portas podem precisar ser abertas manualmente no firewall do provedor de cloud."
+    fi
+}
+
 
 # Função para atualizar o sistema
 update_system() {
@@ -733,28 +749,19 @@ configure_nginx() {
     log_info "Criando configuração inicial HTTP do Nginx para $SUBDOMAIN.$DOMAIN..."
     
     # Criar configuração do site (inicialmente APENAS HTTP)
-    # Inclui a rota para o .well-known/acme-challenge para o Certbot
+    # Esta configuração é mínima e funcional para HTTP e o desafio Certbot
     sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
 server {
     listen 80;
     listen [::]:80; # Listen on IPv6 as well
     server_name $SUBDOMAIN.$DOMAIN;
     
-    # Root directory for frontend
-    root $INSTALL_DIR/frontend/dist; # This path may not exist yet, but it's okay for initial HTTP
-    index index.html;
-    
     # Location for Let's Encrypt ACME challenges
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
 
-    # Frontend routes (React Router)
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-    
-    # API routes (proxy to backend)
+    # Proxy to backend (even on HTTP initially, for basic testing)
     location /api/ {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
@@ -765,33 +772,13 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_cache_bypass \$http_upgrade;
-        
-        # Timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
     }
     
-    # Health check
-    location /health {
-        proxy_pass http://localhost:3000/health;
-        access_log off;
-    }
-    
-    # Uploads
-    location /uploads/ {
-        alias $INSTALL_DIR/backend/uploads/;
-        expires 1y;
-        add_header Cache-Control "public";
-    }
-    
-    # Security: Block access to sensitive files
-    location ~ /\. {
-        deny all;
-    }
-    
-    location ~ \.(env|log|conf)$ {
-        deny all;
+    # Serve frontend from dist folder (if exists, otherwise 404)
+    location / {
+        root $INSTALL_DIR/frontend/dist;
+        index index.html;
+        try_files \$uri \$uri/ /index.html;
     }
 }
 EOF
@@ -802,13 +789,13 @@ EOF
     # Remover configuração padrão se existir
     sudo rm -f /etc/nginx/sites-enabled/default
     
-    # Testar configuração
+    # Testar e recarregar Nginx
+    log_info "Testando e recarregando Nginx com a configuração HTTP inicial..."
     if sudo nginx -t; then
-        log_success "Configuração inicial HTTP do Nginx criada com sucesso"
-        sudo systemctl reload nginx # Reload Nginx after initial config
+        sudo systemctl reload nginx
+        log_success "Configuração inicial HTTP do Nginx criada e recarregada com sucesso."
     else
-        log_error "Erro na configuração inicial HTTP do Nginx"
-        # Verificar o status do Nginx para obter mais detalhes
+        log_error "Erro na configuração inicial HTTP do Nginx. Verifique 'sudo nginx -t' e 'systemctl status nginx'."
         sudo systemctl status nginx --no-pager || true 
         exit 1
     fi
@@ -843,28 +830,15 @@ install_ssl() {
         fi
     fi
     
-    # Iniciar Nginx se não estiver rodando (necessário para webroot/nginx plugin)
-    if ! sudo systemctl is-active --quiet nginx; then
-        log_info "Nginx não está ativo, tentando iniciar para validação SSL..."
-        if sudo systemctl start nginx; then
-            log_success "Nginx iniciado com sucesso."
-        else
-            log_error "Falha ao iniciar Nginx. Verifique 'systemctl status nginx'."
-            sudo systemctl status nginx --no-pager || true
-            log_warning "Certbot não poderá validar o domínio. Continuando sem HTTPS..."
-            return # Sai da função install_ssl, Nginx está parado.
-        fi
-    fi
-
     # Obter certificado SSL usando certbot --nginx (agora que Nginx está ativo e configurado HTTP)
     log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN usando plugin Nginx do Certbot..."
     
     local certbot_success=false
+    # Tentar obter o certificado usando certbot --nginx, que deve lidar com o Nginx ativo.
     if sudo certbot --nginx -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
         certbot_success=true
         log_success "Certificado SSL obtido e Nginx configurado para HTTPS com sucesso."
-        # Certbot --nginx já recarrega o Nginx se bem-sucedido.
-        # Nginx auto-configura renovação via cron.
+        # Certbot --nginx já recarrega o Nginx e configura renovação por cron se bem-sucedido.
     else
         log_error "Falha ao obter certificado SSL com certbot --nginx. Verifique registros DNS, firewall e logs do Certbot."
         log_warning "O site permanecerá acessível via HTTP."
@@ -1027,6 +1001,7 @@ main() {
     
     # Instalação das dependências
     update_system
+    configure_firewall # Adicionado: configurar firewall antes de instalar serviços de rede
     install_nodejs
     install_pm2
     install_mongodb
