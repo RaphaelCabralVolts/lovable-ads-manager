@@ -185,6 +185,7 @@ collect_user_input() {
                 MONGODB_CHOICE="existing"
                 while [[ -z "$MONGODB_URI" ]]; do
                     read -r -p "Digite a URI do MongoDB: " MONGODB_URI
+                
                 done
                 break
                 ;;
@@ -517,34 +518,51 @@ clone_repository() {
     log_step "CLONANDO REPOSITÓRIO DO GITHUB"
     
     # Criar diretório de instalação (se já existe, mkdir -p não faz nada)
+    # Garante que o diretório base exista e o usuário que executa o script o possua
     sudo mkdir -p "$INSTALL_DIR"
-    sudo chown $USER:$USER "$INSTALL_DIR"
+    sudo chown $USER:$USER "$INSTALL_DIR" 
     
-    log_info "Verificando se o repositório já está no diretório de instalação ($INSTALL_DIR)..."
+    log_info "Verificando o estado do repositório em $INSTALL_DIR..."
 
-    # Verifica se INSTALL_DIR já é um repositório git e é o diretório atual
-    if [[ -d "$INSTALL_DIR/.git" && "$(pwd)" == "$INSTALL_DIR" ]]; then
-        log_info "Repositório já clonado no diretório de instalação ($INSTALL_DIR). Puxando atualizações..."
-        git pull origin main
-    elif [[ -d "$INSTALL_DIR/.git" ]]; then
-        # Este caso lida com .git existente em INSTALL_DIR mas o script é executado de outro lugar
-        log_info "Repositório já existe em $INSTALL_DIR. Mudando para o diretório e puxando atualizações..."
+    # Verifica se o diretório é um repositório Git e se a pasta 'backend' existe dentro dele
+    if [[ -d "$INSTALL_DIR/.git" && -d "$INSTALL_DIR/backend" ]]; then
+        log_info "Repositório existente e parece completo em $INSTALL_DIR. Puxando atualizações..."
         cd "$INSTALL_DIR"
-        git pull origin main
+        # Usar --force-with-lease ou rebase pode ser mais seguro que --force puro em alguns cenários,
+        # mas para um script de deploy, um --force pode ser necessário para garantir que tudo seja puxado.
+        git pull origin main # Removido --force por enquanto para diagnosticar
     else
-        # Este caso lida com INSTALL_DIR vazio ou sem .git, e o script é executado de qualquer lugar
-        log_info "Clonando repositório de $GITHUB_REPO para $INSTALL_DIR..."
+        log_warning "Diretório $INSTALL_DIR não é um repositório completo ou está vazio/incompleto. Forçando clonagem fresca..."
+        # Limpar o diretório completamente (incluindo arquivos ocultos como .git)
+        # Atenção: Esta linha é destrutiva, apaga TUDO dentro de INSTALL_DIR
+        sudo rm -rf "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*
+        sudo rm -rf "$INSTALL_DIR"/.git # Garante que .git também seja removido se incompleto
+        
+        # Clonar o repositório
         git clone "$GITHUB_REPO" "$INSTALL_DIR"
-        cd "$INSTALL_DIR"
+        cd "$INSTALL_DIR" # Entra no diretório clonado
     fi
     
-    log_success "Repositório clonado/atualizado com sucesso"
+    # Verificação explícita do diretório 'backend' após a operação de git clone/pull
+    if [[ ! -d "$INSTALL_DIR/backend" ]]; then
+        log_error "Erro crítico: O diretório 'backend' NÃO FOI ENCONTRADO em $INSTALL_DIR após a clonagem/atualização do repositório."
+        log_error "O repositório GitHub pode estar incompleto ou a operação de clonagem/pull falhou fundamentalmente."
+        exit 1
+    fi
+
+    log_success "Repositório clonado/atualizado e diretório 'backend' verificado com sucesso"
 }
 
 # Função para instalar dependências do backend
 install_backend_dependencies() {
     log_step "INSTALANDO DEPENDÊNCIAS DO BACKEND"
     
+    # Antes de fazer cd, verificar se $INSTALL_DIR/backend existe
+    if [[ ! -d "$INSTALL_DIR/backend" ]]; then
+        log_error "Erro: O diretório do backend '$INSTALL_DIR/backend' não foi encontrado. A instalação não pode continuar."
+        exit 1
+    fi
+
     cd "$INSTALL_DIR/backend"
     
     log_info "Instalando dependências do Node.js..."
@@ -557,6 +575,12 @@ install_backend_dependencies() {
 install_frontend_dependencies() {
     log_step "INSTALANDO DEPENDÊNCIAS DO FRONTEND"
     
+    # Antes de fazer cd, verificar se $INSTALL_DIR/frontend existe
+    if [[ ! -d "$INSTALL_DIR/frontend" ]]; then
+        log_error "Erro: O diretório do frontend '$INSTALL_DIR/frontend' não foi encontrado. A instalação não pode continuar."
+        exit 1
+    fi
+
     cd "$INSTALL_DIR/frontend"
     
     log_info "Instalando dependências do React..."
@@ -717,7 +741,7 @@ server {
     server_name $SUBDOMAIN.$DOMAIN;
     
     # Root directory for frontend
-    root $INSTALL_DIR/frontend/dist;
+    root $INSTALL_DIR/frontend/dist; # This path may not exist yet, but it's okay for initial HTTP
     index index.html;
     
     # Location for Let's Encrypt ACME challenges
@@ -784,6 +808,8 @@ EOF
         sudo systemctl reload nginx # Reload Nginx after initial config
     else
         log_error "Erro na configuração inicial HTTP do Nginx"
+        # Verificar o status do Nginx para obter mais detalhes
+        sudo systemctl status nginx --no-pager || true 
         exit 1
     fi
 }
@@ -817,134 +843,40 @@ install_ssl() {
         fi
     fi
     
-    # Parar Nginx temporariamente para o Certbot
-    log_info "Parando Nginx para permitir que Certbot obtenha o certificado..."
-    sudo systemctl stop nginx
-    
-    # Obter certificado SSL usando certonly e webroot
-    log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN usando webroot..."
-    
-    if sudo certbot certonly --webroot -w /var/www/certbot -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
-        log_success "Certificado SSL obtido com sucesso. Reconfigurando Nginx para HTTPS..."
-        
-        # Agora que o certificado existe, crie a configuração Nginx COMPLETA
-        sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $SUBDOMAIN.$DOMAIN;
-    return 301 https://\$server_name\$request_uri; # Redirect HTTP to HTTPS
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $SUBDOMAIN.$DOMAIN;
-    
-    # SSL Configuration
-    ssl_certificate /etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/privkey.pem;
-    
-    # SSL Security
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # Security Headers
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    
-    # Root directory for frontend
-    root $INSTALL_DIR/frontend/dist;
-    index index.html;
-    
-    # Gzip compression
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
-    
-    # Frontend routes (React Router)
-    location / {
-        try_files \$uri \$uri/ /index.html;
-        
-        # Cache static assets
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
-            expires 1y;
-            add_header Cache-Control "public, immutable";
-        }
-    }
-    
-    # API routes (proxy to backend)
-    location /api/ {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        
-        # Timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-    
-    # Health check
-    location /health {
-        proxy_pass http://localhost:3000/health;
-        access_log off;
-    }
-    
-    # Uploads
-    location /uploads/ {
-        alias $INSTALL_DIR/backend/uploads/;
-        expires 1y;
-        add_header Cache-Control "public";
-    }
-    
-    # Security: Block access to sensitive files
-    location ~ /\. {
-        deny all;
-    }
-    
-    location ~ \.(env|log|conf)$ {
-        deny all;
-    }
-}
-EOF
-        # Configurar renovação automática
-        echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
-        
-    else # Certbot certonly failed
-        log_warning "Falha ao obter certificado SSL. Verifique seus registros DNS e firewall. Continuando sem HTTPS..."
-        # Nginx permanecerá configurado apenas para HTTP, da função configure_nginx.
-    fi
-    
-    # Iniciar Nginx após o processo do Certbot (mesmo se falhar, para manter HTTP)
-    log_info "Iniciando Nginx..."
-    sudo systemctl start nginx # Inicia o Nginx (com a configuração HTTP ou HTTPS, dependendo do sucesso do Certbot)
-    
-    # Testar e recarregar Nginx (apenas se Certbot foi bem-sucedido)
-    if [[ $? -eq 0 ]]; then # Check if last command (certbot) was successful
-        if sudo nginx -t; then
-            log_success "Nginx configurado com SSL e recarregado com sucesso."
-            # Nginx já está iniciado, só recarrega se o teste for ok
-            sudo systemctl reload nginx
+    # Iniciar Nginx se não estiver rodando (necessário para webroot/nginx plugin)
+    if ! sudo systemctl is-active --quiet nginx; then
+        log_info "Nginx não está ativo, tentando iniciar para validação SSL..."
+        if sudo systemctl start nginx; then
+            log_success "Nginx iniciado com sucesso."
         else
-            log_error "Erro na configuração final do Nginx pós-SSL. Verifique o arquivo de configuração."
-            exit 1
+            log_error "Falha ao iniciar Nginx. Verifique 'systemctl status nginx'."
+            sudo systemctl status nginx --no-pager || true
+            log_warning "Certbot não poderá validar o domínio. Continuando sem HTTPS..."
+            return # Sai da função install_ssl, Nginx está parado.
         fi
+    fi
+
+    # Obter certificado SSL usando certbot --nginx (agora que Nginx está ativo e configurado HTTP)
+    log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN usando plugin Nginx do Certbot..."
+    
+    local certbot_success=false
+    if sudo certbot --nginx -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
+        certbot_success=true
+        log_success "Certificado SSL obtido e Nginx configurado para HTTPS com sucesso."
+        # Certbot --nginx já recarrega o Nginx se bem-sucedido.
+        # Nginx auto-configura renovação via cron.
     else
-        # Se o Certbot falhou, apenas recarrega para garantir que a config HTTP esteja ativa
-        sudo systemctl reload nginx
+        log_error "Falha ao obter certificado SSL com certbot --nginx. Verifique registros DNS, firewall e logs do Certbot."
+        log_warning "O site permanecerá acessível via HTTP."
+        
+        # Se o Certbot falhar, garantimos que o Nginx está no estado HTTP inicial
+        if sudo nginx -t; then
+            sudo systemctl reload nginx # Recarrega para garantir config HTTP ativa
+        else
+            log_error "Nginx tem erro de configuração. Por favor, corrija manualmente."
+            sudo systemctl status nginx --no-pager || true
+            exit 1 # Erro fatal se Nginx está quebrado
+        fi
     fi
 }
 
@@ -1052,6 +984,7 @@ test_installation() {
     # Testar acesso web
     log_info "Testando acesso web..."
     PROTOCOL="http"
+    # Verificar se os arquivos de certificado existem antes de tentar HTTPS
     if [[ -f "/etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/fullchain.pem" ]]; then
         PROTOCOL="https"
     fi
