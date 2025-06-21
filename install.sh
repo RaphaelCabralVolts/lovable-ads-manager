@@ -778,10 +778,6 @@ EOF
     # Remover configuração padrão se existir
     sudo rm -f /etc/nginx/sites-enabled/default
     
-    # Criar diretório para desafios Certbot (Certbot espera /var/www/certbot por padrão com --nginx)
-    sudo mkdir -p /var/www/certbot
-    sudo chown www-data:www-data /var/www/certbot # Nginx user needs access
-
     # Testar configuração
     if sudo nginx -t; then
         log_success "Configuração inicial HTTP do Nginx criada com sucesso"
@@ -796,12 +792,19 @@ EOF
 install_ssl() {
     log_step "CONFIGURANDO SSL COM LET'S ENCRYPT"
     
+    # Certifique-se de que o diretório para desafios do Certbot existe e tem as permissões corretas
+    log_info "Verificando e configurando diretório /var/www/certbot..."
+    sudo mkdir -p /var/www/certbot
+    sudo chown www-data:www-data /var/www/certbot # Nginx user needs access
+    sudo chmod 755 /var/www/certbot # Ensure execute permission for directories
+    log_success "Diretório /var/www/certbot configurado."
+
     # Instalar Certbot
     if ! command_exists certbot; then
         log_info "Instalando Certbot..."
         
         if [[ "$OS_TYPE" == *"Ubuntu"* ]] || [[ "$OS_TYPE" == *"Debian"* ]]; then
-            sudo apt install -y certbot python3-certbot-nginx
+            sudo apt update && sudo apt install -y certbot python3-certbot-nginx
         elif [[ "$OS_TYPE" == *"CentOS"* ]] || [[ "$OS_TYPE" == *"Red Hat"* ]]; then
             if command_exists dnf; then
                 sudo dnf install -y certbot python3-certbot-nginx
@@ -814,13 +817,17 @@ install_ssl() {
         fi
     fi
     
+    # Parar Nginx temporariamente para o Certbot
+    log_info "Parando Nginx para permitir que Certbot obtenha o certificado..."
+    sudo systemctl stop nginx
+    
     # Obter certificado SSL usando certonly e webroot
     log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN usando webroot..."
     
     if sudo certbot certonly --webroot -w /var/www/certbot -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
         log_success "Certificado SSL obtido com sucesso. Reconfigurando Nginx para HTTPS..."
         
-        # Agora que o certificado existe, reconfigure o Nginx para HTTPS
+        # Agora que o certificado existe, crie a configuração Nginx COMPLETA
         sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
 server {
     listen 80;
@@ -921,8 +928,24 @@ EOF
         # Nginx permanecerá configurado apenas para HTTP, da função configure_nginx.
     fi
     
-    # Sempre recarregar Nginx para garantir que novas configurações (seja HTTP ou HTTPS) sejam aplicadas.
-    sudo systemctl reload nginx
+    # Iniciar Nginx após o processo do Certbot (mesmo se falhar, para manter HTTP)
+    log_info "Iniciando Nginx..."
+    sudo systemctl start nginx # Inicia o Nginx (com a configuração HTTP ou HTTPS, dependendo do sucesso do Certbot)
+    
+    # Testar e recarregar Nginx (apenas se Certbot foi bem-sucedido)
+    if [[ $? -eq 0 ]]; then # Check if last command (certbot) was successful
+        if sudo nginx -t; then
+            log_success "Nginx configurado com SSL e recarregado com sucesso."
+            # Nginx já está iniciado, só recarrega se o teste for ok
+            sudo systemctl reload nginx
+        else
+            log_error "Erro na configuração final do Nginx pós-SSL. Verifique o arquivo de configuração."
+            exit 1
+        fi
+    else
+        # Se o Certbot falhou, apenas recarrega para garantir que a config HTTP esteja ativa
+        sudo systemctl reload nginx
+    fi
 }
 
 # =============================================================================
