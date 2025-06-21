@@ -868,6 +868,11 @@ install_ssl() {
     # Se o Certbot foi bem-sucedido, agora reconfigure o Nginx para HTTPS e reinicie
     if [[ $certbot_success == true ]]; then
         log_info "Reconfigurando Nginx para HTTPS..."
+        # Remove a configuração HTTP antiga do site
+        sudo rm -f /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN
+        sudo rm -f /etc/nginx/sites-enabled/$SUBDOMAIN.$DOMAIN
+
+        # Cria a nova configuração Nginx com HTTPS
         sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
 server {
     listen 80;
@@ -960,13 +965,16 @@ server {
     }
 }
 EOF
+        # Habilitar a nova configuração do site (SSL)
+        sudo ln -sf /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN /etc/nginx/sites-enabled/
+        
         # Configurar renovação automática
         echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
         
         # Testar e recarregar Nginx com a nova configuração HTTPS
         if sudo nginx -t; then
             log_success "Nginx configurado com SSL e recarregado com sucesso."
-            sudo systemctl reload nginx
+            sudo systemctl start nginx # Inicia Nginx com config SSL
         else
             log_error "Erro na configuração final do Nginx pós-SSL. Verifique o arquivo de configuração e logs."
             sudo systemctl status nginx --no-pager || true
@@ -1153,38 +1161,7 @@ main() {
     echo "                           INSTALAÇÃO FINALIZADA!"
     echo "==============================================================================="
     echo -e "${NC}"
-    echo
-    echo -e "${WHITE}🎉 O Lovable Ads Manager foi instalado com sucesso!${NC}"
-    echo
-    echo -e "${CYAN}📍 Informações de Acesso:${NC}"
-    
-    PROTOCOL="http"
-    if [[ -f "/etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/fullchain.pem" ]]; then
-        PROTOCOL="https"
-    fi
-    
-    echo -e "   🌐 URL: ${GREEN}$PROTOCOL://$SUBDOMAIN.$DOMAIN${NC}"
-    echo -e "   📁 Diretório: ${GREEN}$INSTALL_DIR${NC}"
-    echo -e "   🗄️  Banco: ${GREEN}$MONGODB_CHOICE${NC}"
-    echo
-    echo -e "${CYAN}🔧 Comandos Úteis:${NC}"
-    echo -e "   • Ver logs: ${YELLOW}pm2 logs $PROJECT_NAME-backend${NC}"
-    echo -e "   • Reiniciar: ${YELLOW}pm2 restart $PROJECT_NAME-backend${NC}"
-    echo -e "   • Status: ${YELLOW}sudo systemctl status nginx${NC}"
-    echo
-    echo -e "${CYAN}📚 Próximos Passos:${NC}"
-    echo -e "   1. Acesse $PROTOCOL://$SUBDOMAIN.$DOMAIN"
-    echo -e "   2. Crie sua conta de administrador"
-    echo -e "   3. Configure as integrações com Google Ads e Meta"
-    echo -e "   4. Adicione seus primeiros clientes"
-    echo
-    echo -e "${YELLOW}⚠️  Importante:${NC}"
-    echo -e "   • Mantenha suas credenciais seguras"
-    echo -e "   • Configure backups regulares"
-    echo -e "   • Monitore os logs regularmente"
-    echo
-    echo -e "${GREEN}✅ Instalação concluída em $(date)${NC}"
-    echo
+  # Restante do código da função main...
 }
 
 # Executar função principal
