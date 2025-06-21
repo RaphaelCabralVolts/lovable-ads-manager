@@ -307,7 +307,6 @@ configure_firewall() {
         sudo ufw allow OpenSSH
         sudo ufw allow http
         sudo ufw allow https
-        # Não ativar o UFW com --force enable aqui. A ativação será perguntada ao usuário.
         log_success "Portas 80 (HTTP), 443 (HTTPS) e 22 (SSH) liberadas no UFW."
         
         # Ativar UFW se não estiver ativo, com confirmação do usuário
@@ -612,7 +611,22 @@ install_frontend_dependencies() {
     cd "$INSTALL_DIR/frontend"
     
     log_info "Construindo aplicação para produção..."
-    npm run build
+    # Usar $(npm bin)/vite para garantir que o executável 'vite' seja encontrado
+    if command_exists $(npm bin)/vite; then
+        $(npm bin)/vite build
+    else
+        log_error "O executável 'vite' não foi encontrado em node_modules/.bin/. Verifique as dependências do frontend."
+        # Tentar uma reconstrução de dependências pode ajudar se os binários não foram linkados corretamente
+        log_info "Tentando 'npm rebuild' para corrigir o executável 'vite'..."
+        npm rebuild
+        if command_exists $(npm bin)/vite; then
+            log_success "'vite' encontrado após 'npm rebuild'. Tentando construir novamente."
+            $(npm bin)/vite build
+        else
+            log_error "Falha: 'vite' ainda não encontrado após 'npm rebuild'. A construção do frontend não pode continuar."
+            exit 1
+        fi
+    fi
     
     log_success "Frontend construído com sucesso"
 }
@@ -785,7 +799,7 @@ server {
     
     # Serve frontend from dist folder (if exists, otherwise 404)
     location / {
-        root $INSTALL_DIR/frontend/dist;
+        root $INSTALL_DIR/frontend/dist; # This path may not exist yet, but it's okay for initial HTTP
         index index.html;
         try_files \$uri \$uri/ /index.html;
     }
@@ -1161,7 +1175,38 @@ main() {
     echo "                           INSTALAÇÃO FINALIZADA!"
     echo "==============================================================================="
     echo -e "${NC}"
-  # Restante do código da função main...
+    echo
+    echo -e "${WHITE}🎉 O Lovable Ads Manager foi instalado com sucesso!${NC}"
+    echo
+    echo -e "${CYAN}📍 Informações de Acesso:${NC}"
+    
+    PROTOCOL="http"
+    if [[ -f "/etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/fullchain.pem" ]]; then
+        PROTOCOL="https"
+    fi
+    
+    echo -e "   🌐 URL: ${GREEN}$PROTOCOL://$SUBDOMAIN.$DOMAIN${NC}"
+    echo -e "   📁 Diretório: ${GREEN}$INSTALL_DIR${NC}"
+    echo -e "   🗄️  Banco: ${GREEN}$MONGODB_CHOICE${NC}"
+    echo
+    echo -e "${CYAN}🔧 Comandos Úteis:${NC}"
+    echo -e "   • Ver logs: ${YELLOW}pm2 logs $PROJECT_NAME-backend${NC}"
+    echo -e "   • Reiniciar: ${YELLOW}pm2 restart $PROJECT_NAME-backend${NC}"
+    echo -e "   • Status: ${YELLOW}sudo systemctl status nginx${NC}"
+    echo
+    echo -e "${CYAN}📚 Próximos Passos:${NC}"
+    echo -e "   1. Acesse $PROTOCOL://$SUBDOMAIN.$DOMAIN"
+    echo -e "   2. Crie sua conta de administrador"
+    echo -e "   3. Configure as integrações com Google Ads e Meta"
+    echo -e "   4. Adicione seus primeiros clientes"
+    echo
+    echo -e "${YELLOW}⚠️  Importante:${NC}"
+    echo -e "   • Mantenha suas credenciais seguras"
+    echo -e "   • Configure backups regulares"
+    echo -e "   • Monitore os logs regularmente"
+    echo
+    echo -e "${GREEN}✅ Instalação concluída em $(date)${NC}"
+    echo
 }
 
 # Executar função principal
