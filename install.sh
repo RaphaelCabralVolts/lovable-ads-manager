@@ -257,7 +257,7 @@ collect_user_input() {
     echo -e "Diretório: ${GREEN}$INSTALL_DIR${NC}"
     echo -e "MongoDB: ${GREEN}$MONGODB_CHOICE${NC}"
     echo -e "SMTP: ${GREEN}$SMTP_HOST:$SMTP_PORT${NC}"
-    echo -e "Gateway: ${GREEN}$GATEAY_TYPE${NC}"
+    echo -e "Gateway: ${GREEN}$GATEWAY_TYPE${NC}"
     
     echo
     read -r -p "Confirma a instalação com essas configurações? [y/N]: " confirm
@@ -307,10 +307,22 @@ configure_firewall() {
         sudo ufw allow OpenSSH
         sudo ufw allow http
         sudo ufw allow https
-        sudo ufw --force enable
+        # Não ativar o UFW com --force enable aqui. A ativação será perguntada ao usuário.
         log_success "Portas 80 (HTTP), 443 (HTTPS) e 22 (SSH) liberadas no UFW."
+        
+        # Ativar UFW se não estiver ativo, com confirmação do usuário
+        if ! sudo ufw status | grep -q "Status: active"; then
+            log_warning "UFW não está ativo. Ativando o firewall. Isso pode desconectar sua sessão SSH temporariamente."
+            read -r -p "Deseja ativar o UFW agora? [y/N]: " activate_ufw
+            if [[ "$activate_ufw" =~ ^[Yy]$ ]]; then
+                sudo ufw enable || log_error "Falha ao ativar UFW. Verifique logs."
+            else
+                log_warning "UFW não ativado. Certifique-se de que as portas estão abertas manualmente no firewall do provedor de cloud."
+            fi
+        fi
+
     else
-        log_warning "UFW não detectado. As portas podem precisar ser abertas manualmente no firewall do provedor de cloud."
+        log_warning "UFW não detectado. As portas podem precisar ser abertas manualmente no firewall do provedor de cloud (Hetzner)."
     fi
 }
 
@@ -599,9 +611,6 @@ install_frontend_dependencies() {
 
     cd "$INSTALL_DIR/frontend"
     
-    log_info "Instalando dependências do React..."
-    npm install
-    
     log_info "Construindo aplicação para produção..."
     npm run build
     
@@ -830,28 +839,140 @@ install_ssl() {
         fi
     fi
     
-    # Obter certificado SSL usando certbot --nginx (agora que Nginx está ativo e configurado HTTP)
-    log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN usando plugin Nginx do Certbot..."
+    # Parar Nginx para que o Certbot standalone possa usar a porta 80
+    log_info "Parando Nginx para permitir que Certbot obtenha o certificado com standalone..."
+    sudo systemctl stop nginx || log_warning "Nginx não estava rodando ou falhou ao parar, continuando..."
+    
+    log_info "Obtendo certificado SSL para $SUBDOMAIN.$DOMAIN usando standalone authenticator..."
     
     local certbot_success=false
-    # Tentar obter o certificado usando certbot --nginx, que deve lidar com o Nginx ativo.
-    if sudo certbot --nginx -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
+    # Tentar obter o certificado usando certonly --standalone
+    if sudo certbot certonly --standalone -d $SUBDOMAIN.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN; then
         certbot_success=true
-        log_success "Certificado SSL obtido e Nginx configurado para HTTPS com sucesso."
-        # Certbot --nginx já recarrega o Nginx e configura renovação por cron se bem-sucedido.
+        log_success "Certificado SSL obtido com sucesso."
     else
-        log_error "Falha ao obter certificado SSL com certbot --nginx. Verifique registros DNS, firewall e logs do Certbot."
-        log_warning "O site permanecerá acessível via HTTP."
-        
-        # Se o Certbot falhar, garantimos que o Nginx está no estado HTTP inicial
-        if sudo nginx -t; then
-            sudo systemctl reload nginx # Recarrega para garantir config HTTP ativa
+        log_error "Falha ao obter certificado SSL com Certbot standalone. Verifique seus registros DNS e firewall."
+        # Se Certbot falhou, tentar reiniciar Nginx com a configuração HTTP original
+        log_info "Tentando reiniciar Nginx com a configuração HTTP original..."
+        if sudo nginx -t; then # Verifique a sintaxe da config HTTP que deveria estar lá
+            sudo systemctl start nginx
+            log_warning "Instalação SSL falhou. O site continuará acessível apenas via HTTP."
+            return # Sai da função install_ssl
         else
-            log_error "Nginx tem erro de configuração. Por favor, corrija manualmente."
+            log_error "Configuração HTTP do Nginx inválida após falha do Certbot. Nginx não pode ser iniciado."
             sudo systemctl status nginx --no-pager || true
-            exit 1 # Erro fatal se Nginx está quebrado
+            exit 1 # Erro fatal
         fi
     fi
+
+    # Se o Certbot foi bem-sucedido, agora reconfigure o Nginx para HTTPS e reinicie
+    if [[ $certbot_success == true ]]; then
+        log_info "Reconfigurando Nginx para HTTPS..."
+        sudo tee /etc/nginx/sites-available/$SUBDOMAIN.$DOMAIN > /dev/null << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $SUBDOMAIN.$DOMAIN;
+    return 301 https://\$server_name\$request_uri; # Redirect HTTP to HTTPS
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $SUBDOMAIN.$DOMAIN;
+    
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$SUBDOMAIN.$DOMAIN/privkey.pem;
+    
+    # SSL Security
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # Security Headers
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    
+    # Root directory for frontend
+    root $INSTALL_DIR/frontend/dist;
+    index index.html;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
+    
+    # Frontend routes (React Router)
+    location / {
+        try_files \$uri \$uri/ /index.html;
+        
+        # Cache static assets
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+    
+    # API routes (proxy to backend)
+    location /api/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        
+        # Timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+    
+    # Health check
+    location /health {
+        proxy_pass http://localhost:3000/health;
+        access_log off;
+    }
+    
+    # Uploads
+    location /uploads/ {
+        alias $INSTALL_DIR/backend/uploads/;
+        expires 1y;
+        add_header Cache-Control "public";
+    }
+    
+    # Security: Block access to sensitive files
+    location ~ /\. {
+        deny all;
+    }
+    
+    location ~ \.(env|log|conf)$ {
+        deny all;
+    }
+}
+EOF
+        # Configurar renovação automática
+        echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
+        
+        # Testar e recarregar Nginx com a nova configuração HTTPS
+        if sudo nginx -t; then
+            log_success "Nginx configurado com SSL e recarregado com sucesso."
+            sudo systemctl reload nginx
+        else
+            log_error "Erro na configuração final do Nginx pós-SSL. Verifique o arquivo de configuração e logs."
+            sudo systemctl status nginx --no-pager || true
+            exit 1
+        fi
+    fi # End of if certbot_success
 }
 
 # =============================================================================
@@ -1005,13 +1126,15 @@ main() {
     install_nodejs
     install_pm2
     install_mongodb
-    install_nginx # Esta função agora cria apenas a configuração HTTP e prepara para Certbot
     
-    # Instalação da aplicação
+    # Nginx configurado e iniciado ANTES da clonagem para garantir que esteja pronto para Certbot
+    install_nginx 
+    
+    # Instalação da aplicação (repositório e dependências)
     clone_repository
     install_backend_dependencies
     install_frontend_dependencies
-    configure_environment
+    configure_environment # Cria .env files com URLs baseadas no domínio HTTP/HTTPS
     
     # Configuração do servidor web e SSL
     install_ssl # Esta função agora tenta obter o SSL e reconfigura o Nginx para HTTPS
@@ -1047,8 +1170,7 @@ main() {
     echo -e "${CYAN}🔧 Comandos Úteis:${NC}"
     echo -e "   • Ver logs: ${YELLOW}pm2 logs $PROJECT_NAME-backend${NC}"
     echo -e "   • Reiniciar: ${YELLOW}pm2 restart $PROJECT_NAME-backend${NC}"
-    echo -e "   • Status: ${YELLOW}pm2 status${NC}"
-    echo -e "   • Nginx: ${YELLOW}sudo systemctl status nginx${NC}"
+    echo -e "   • Status: ${YELLOW}sudo systemctl status nginx${NC}"
     echo
     echo -e "${CYAN}📚 Próximos Passos:${NC}"
     echo -e "   1. Acesse $PROTOCOL://$SUBDOMAIN.$DOMAIN"
